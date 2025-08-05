@@ -89,8 +89,10 @@
         // Carregamento do modelo VRM
         let vrm = null;
         const loader = new THREE.VRMLoader();
-        loader.load(
-            'https://<seu-servidor>/models/meu_avatar.vrm', // Substitua pelo caminho do seu modelo VRM hospedado
+       loader.load(
+    'NullTapes.vrm', // Caminho relativo ao arquivo VRM na raiz
+    ...
+);
             (vrmModel) => {
                 vrm = vrmModel;
                 scene.add(vrm.scene);
