@@ -1,0 +1,205 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VTuber Avatar com Rastreamento Facial e Voz</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #startButton {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        #video {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 320px;
+            height: 240px;
+            border: 1px solid #ccc;
+        }
+    </style>
+</head>
+<body>
+    <button id="startButton">Iniciar Captura de Voz e Webcam</button>
+    <video id="video" autoplay playsinline style="display: none;"></video>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+    <script src="https://unpkg.com/@pixiv/three-vrm@1.0.9/lib/three-vrm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/face_mesh.js"></script>
+    <script>
+        // Configuração da cena Three.js
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 1.5, 1.5);
+        camera.lookAt(0, 1.2, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const light = new THREE.DirectionalLight(0xffffff, 0.8);
+        light.position.set(1, 1, 1);
+        scene.add(light);
+        scene.add(new THREE.AmbientLight(0x404040));
+
+        // Carregamento do modelo VRM
+        let vrm = null;
+        const loader = new THREE.VRMLoader();
+        loader.load(
+            'https://<seu-servidor>/models/meu_avatar.vrm', // Substitua pelo caminho do seu modelo VRM hospedado
+            (vrmModel) => {
+                vrm = vrmModel;
+                scene.add(vrm.scene);
+                vrm.scene.rotation.y = Math.PI; // Rotaciona o modelo para frente
+                console.log('Modelo VRM carregado com sucesso');
+            },
+            (progress) => console.log('Carregando modelo:', progress.loaded / progress.total * 100, '%'),
+            (error) => console.error('Erro ao carregar o modelo:', error)
+        );
+
+        // Configuração da Web Audio API para voz
+        let audioContext, analyser, dataArray;
+        const startButton = document.getElementById('startButton');
+        startButton.addEventListener('click', async () => {
+            // Iniciar áudio
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+                const source = audioContext.createMediaStreamSource(stream);
+                source.connect(analyser);
+
+                // Iniciar vídeo para rastreamento facial
+                const video = document.getElementById('video');
+                video.srcObject = stream;
+                video.play();
+                startButton.disabled = true;
+                startButton.textContent = 'Capturando Voz e Webcam...';
+                setupFaceMesh(video);
+            } catch (err) {
+                console.error('Erro ao acessar microfone ou webcam:', err);
+                alert('Não foi possível acessar o microfone ou a webcam. Verifique as permissões.');
+            }
+        });
+
+        // Configuração do MediaPipe Face Mesh
+        function setupFaceMesh(video) {
+            const faceMesh = new FaceMesh({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/${file}`
+            });
+            faceMesh.setOptions({
+                maxNumFaces: 1,
+                refineLandmarks: true,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+            faceMesh.onResults(onFaceMeshResults);
+            const camera = new Camera(video, {
+                onFrame: async () => {
+                    await faceMesh.send({ image: video });
+                },
+                width: 640,
+                height: 480
+            });
+            camera.start();
+        }
+
+        // Processar resultados do Face Mesh
+        function onFaceMeshResults(results) {
+            if (results.multiFaceLandmarks && vrm && vrm.blendShapeProxy) {
+                const landmarks = results.multiFaceLandmarks[0];
+                if (landmarks) {
+                    // Mapear pontos faciais para blendshapes
+                    // Exemplo: Abertura da boca (distância entre pontos da boca)
+                    const mouthTop = landmarks[13]; // Ponto superior da boca
+                    const mouthBottom = landmarks[14]; // Ponto inferior da boca
+                    const mouthOpen = Math.abs(mouthTop.y - mouthBottom.y) * 10; // Escala para blendshape
+                    vrm.blendShapeProxy.setValue('A', Math.min(mouthOpen, 1));
+
+                    // Piscar (distância entre pontos dos olhos)
+                    const leftEyeTop = landmarks[159];
+                    const leftEyeBottom = landmarks[145];
+                    const rightEyeTop = landmarks[386];
+                    const rightEyeBottom = landmarks[374];
+                    const leftBlink = Math.abs(leftEyeTop.y - leftEyeBottom.y) * 20;
+                    const rightBlink = Math.abs(rightEyeTop.y - rightEyeBottom.y) * 20;
+                    vrm.blendShapeProxy.setValue('blink_l', Math.min(leftBlink, 1));
+                    vrm.blendShapeProxy.setValue('blink_r', Math.min(rightBlink, 1));
+                }
+            }
+        }
+
+        // Função de animação
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (vrm && analyser) {
+                // Animar boca com voz (se não houver rastreamento facial)
+                analyser.getByteFrequencyData(dataArray);
+                const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+                const mouthOpenValue = Math.min(average / 255, 1);
+                if (!vrm.blendShapeProxy.getValue('A')) {
+                    vrm.blendShapeProxy.setValue('A', mouthOpenValue);
+                }
+                vrm.update();
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Ajustar tamanho da tela
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
